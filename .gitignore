@@ -1,0 +1,8 @@
+.env
+*.pem
+*.key
+*private*
+wg0.conf
+!.env.example
+!./*.example
+docs/examples/wireguard/wg0.conf

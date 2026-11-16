@@ -1,0 +1,19 @@
+# Example WireGuard gateway (/etc/wireguard/wg0.conf)
+# Generate keys with: wg genkey | tee privatekey | wg pubkey
+# Never commit real private keys.
+
+[Interface]
+Address = 10.20.0.1/24
+ListenPort = 51820
+PrivateKey = REPLACE_ME_SERVER_PRIVATE_KEY
+# Optional: PostUp/PostDown iptables MASQUERADE toward lab nets
+
+[Peer]
+# Operator laptop
+PublicKey = REPLACE_ME_PEER_PUBLIC_KEY
+AllowedIPs = 10.20.0.10/32
+
+[Peer]
+# Second operator
+PublicKey = REPLACE_ME_PEER2_PUBLIC_KEY
+AllowedIPs = 10.20.0.11/32

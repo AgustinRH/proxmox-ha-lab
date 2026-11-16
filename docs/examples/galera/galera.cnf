@@ -1,0 +1,20 @@
+# Example MariaDB Galera snippet (/etc/mysql/mariadb.conf.d/60-galera.cnf)
+# Placeholders only — do not commit real SST passwords.
+
+[mysqld]
+binlog_format=ROW
+default_storage_engine=InnoDB
+innodb_autoinc_lock_mode=2
+bind-address=0.0.0.0
+
+wsrep_on=ON
+wsrep_provider=/usr/lib/galera/libgalera_smm.so
+wsrep_cluster_name="lab-galera"
+wsrep_cluster_address="gcomm://10.10.30.11,10.10.30.12,10.10.30.13"
+wsrep_node_address="10.10.30.11"
+wsrep_node_name="galera1"
+
+wsrep_sst_method=mariabackup
+wsrep_sst_auth="sstuser:REPLACE_ME_SST_PASSWORD"
+
+wsrep_provider_options="gcache.size=512M;gcs.fc_limit=128"
