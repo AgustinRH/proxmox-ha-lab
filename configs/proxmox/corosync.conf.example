@@ -1,0 +1,53 @@
+# Corosync example for a 3-node Proxmox cluster
+# Live file is usually /etc/pve/corosync.conf (replicated) + /etc/corosync/corosync.conf
+# Do NOT invent a totem version by hand on a running cluster — use pvecm.
+# This file is a readable example matching docs/architecture.md.
+
+logging {
+  debug: off
+  to_syslog: yes
+}
+
+nodelist {
+  node {
+    # Site A — cluster VLAN IP
+    name: pve-a
+    nodeid: 1
+    quorum_votes: 1
+    ring0_addr: 10.10.20.11
+  }
+  node {
+    # Site B
+    name: pve-b
+    nodeid: 2
+    quorum_votes: 1
+    ring0_addr: 10.10.20.12
+  }
+  node {
+    # Site C
+    name: pve-c
+    nodeid: 3
+    quorum_votes: 1
+    ring0_addr: 10.10.20.13
+  }
+}
+
+quorum {
+  provider: corosync_votequorum
+  # With 3 votes, expected 3 when all up; majority = 2
+  expected_votes: 3
+  # Optional: lowest nodeid breaks ties — document any custom last-man helper separately
+  # auto_tie_breaker: 1
+}
+
+totem {
+  version: 2
+  # Unique cluster name token (not a secret, but keep stable)
+  cluster_name: lab-pve
+  # Transport over the cluster VLAN IPs above
+  # secauth / crypto settings per your Proxmox generation — leave defaults from pvecm
+  interface {
+    # Link 0 uses ring0_addr from each node
+    linknumber: 0
+  }
+}

@@ -134,7 +134,7 @@ Step-by-step behaviour and how to rehearse it: [docs/failover.md](docs/failover.
 | [docs/failover.md](docs/failover.md) | Node/site failure sequence and test plan |
 | [docs/backup-and-restore.md](docs/backup-and-restore.md) | PBS schedule, retention, restore drill |
 | [docs/runbook.md](docs/runbook.md) | Add a node, rolling upgrades, Galera health |
-| [configs/](configs/) | Example configs (next iteration) |
+| [configs/](configs/) | Sanitized WireGuard, Keepalived, HAProxy, Galera, Proxmox samples — see [configs/README.md](configs/README.md) |
 
 ## Author
 

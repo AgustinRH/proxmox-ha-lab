@@ -1,0 +1,43 @@
+# MariaDB Galera snippet — example for a 3-node ring
+# Drop in as /etc/mysql/mariadb.conf.d/60-galera.cnf on each member.
+# This portfolio uses the three site primaries:
+#   webdb-a1 10.10.40.21
+#   webdb-b1 10.10.40.31
+#   webdb-c1 10.10.40.41
+# On each host, set wsrep_node_address / wsrep_node_name to THAT host.
+
+[mysqld]
+# Required for Galera
+binlog_format = ROW
+default_storage_engine = InnoDB
+innodb_autoinc_lock_mode = 2
+# Listen on the services VLAN (not only localhost) so peers can replicate
+bind-address = 0.0.0.0
+
+# Turn on wsrep
+wsrep_on = ON
+# Path to Galera library (Debian/Ubuntu MariaDB package layout)
+wsrep_provider = /usr/lib/galera/libgalera_smm.so
+
+# Logical cluster name — must match on every member
+wsrep_cluster_name = "lab-galera"
+
+# Full member list (gcomm). Same line on all nodes.
+wsrep_cluster_address = "gcomm://10.10.40.21,10.10.40.31,10.10.40.41"
+
+# --- Per-node: change these two on each server ---
+# Example values below are for webdb-a1; on b1 use .31 / galera-b1, etc.
+wsrep_node_address = "10.10.40.21"
+wsrep_node_name = "galera-a1"
+
+# State snapshot transfer method (mariabackup preferred over rsync for InnoDB)
+wsrep_sst_method = mariabackup
+# SST auth user — create in MySQL; password is NOT stored in git
+wsrep_sst_auth = "sstuser:<CHANGE_ME>"
+
+# Provider tuning (safe starting point; tune under load)
+wsrep_provider_options = "gcache.size=512M;gcs.fc_limit=128"
+
+# Optional: force UTF8 defaults for the app schema
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci

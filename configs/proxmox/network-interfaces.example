@@ -1,0 +1,95 @@
+# Proxmox VE host networking example — /etc/network/interfaces
+# Node: pve-a (Site A). Adapt addresses for pve-b (.12) and pve-c (.13).
+#
+# Physical: 2x 10GbE
+#   eno1 → bond0 → trunks for mgmt (VLAN 10) + services (VLAN 40)
+#   eno2 → bond1 → trunks for cluster (VLAN 20) + storage (VLAN 30)
+#
+# Bonding mode: 802.3ad (LACP). Confirm switch ports are in an LACP group.
+# After editing: ifreload -a   (or reboot during a window)
+
+auto lo
+iface lo inet loopback
+
+# --- Physical NICs (slaves; no IP of their own) ---
+auto eno1
+iface eno1 inet manual
+# First 10GbE — toward access/core for mgmt + VM traffic
+
+auto eno2
+iface eno2 inet manual
+# Second 10GbE — toward cluster / storage fabric
+
+# --- Bond for mgmt + services trunk ---
+auto bond0
+iface bond0 inet manual
+        bond-slaves eno1
+        # LACP
+        bond-miimon 100
+        bond-mode 802.3ad
+        bond-xmit-hash-policy layer2+3
+# If only one NIC is cabled during bring-up, temporarily use bond-mode active-backup
+
+# --- Bond for cluster + storage trunk ---
+auto bond1
+iface bond1 inet manual
+        bond-slaves eno2
+        bond-miimon 100
+        bond-mode 802.3ad
+        bond-xmit-hash-policy layer2+3
+
+# --- VLAN 10: management (Proxmox UI / SSH) ---
+auto bond0.10
+iface bond0.10 inet manual
+        vlan-raw-device bond0
+
+auto vmbr10
+iface vmbr10 inet static
+        # pve-a management address
+        address 10.10.10.11/24
+        gateway 10.10.10.1
+        bridge-ports bond0.10
+        bridge-stp off
+        bridge-fd 0
+# UI: https://10.10.10.11:8006
+
+# --- VLAN 40: services (bridge for app VMs + VIP path) ---
+auto bond0.40
+iface bond0.40 inet manual
+        vlan-raw-device bond0
+
+auto vmbr40
+iface vmbr40 inet manual
+        # Host needs no IP here if VMs are the only consumers; optional host IP omitted
+        bridge-ports bond0.40
+        bridge-stp off
+        bridge-fd 0
+# Attach webdb-* nics to vmbr40 with IPs 10.10.40.x
+
+# --- VLAN 20: Corosync / cluster ---
+auto bond1.20
+iface bond1.20 inet manual
+        vlan-raw-device bond1
+
+auto vmbr20
+iface vmbr20 inet static
+        # Dedicated Corosync address for pve-a
+        address 10.10.20.11/24
+        bridge-ports bond1.20
+        bridge-stp off
+        bridge-fd 0
+# No default gateway on the cluster bridge
+
+# --- VLAN 30: storage / PBS backup path ---
+auto bond1.30
+iface bond1.30 inet manual
+        vlan-raw-device bond1
+
+auto vmbr30
+iface vmbr30 inet static
+        # Optional host address toward PBS VLAN; PBS VMs may sit purely on this bridge
+        address 10.10.30.11/24
+        bridge-ports bond1.30
+        bridge-stp off
+        bridge-fd 0
+# pbs-a example guest IP: 10.10.30.21
