@@ -34,7 +34,7 @@ This describes the **intended** behaviour of the three-site design. Adjust names
 ### What should happen
 
 1. Same as losing that site’s Proxmox vote(s) and all of its VMs.
-2. VIP should already prefer another site via Keepalived priority table (document your order; example: site A primary app VM → site B → site C).
+2. VIP `10.99.0.10/32` moves via Keepalived unicast VRRP (example priority chain: site A → B → C). Point the cross-site host route for that `/32` at the new owner (**TODO** automation).
 3. Galera remains writable if remaining members > half of total members.
 4. Syncthing/Gitea peers at the live sites keep serving; the down site resyncs on return.
 
