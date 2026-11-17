@@ -41,9 +41,9 @@ Do not mix Corosync onto a congested user VLAN. Keep mgmt reachable if services 
 
 | Host | Mgmt IP | Cluster IP | Notes |
 | --- | --- | --- | --- |
-| `pve-a` | `10.10.10.11` | `10.10.20.11` | Site A |
-| `pve-b` | `10.10.10.12` | `10.10.20.12` | Site B |
-| `pve-c` | `10.10.10.13` | `10.10.20.13` | Site C |
+| `pve-a` | `10.10.10.11` | `10.10.20.11` | Site A (optional storage host IP `10.10.30.11`) |
+| `pve-b` | `10.10.10.12` | `10.10.20.12` | Site B (optional `10.10.30.12`) |
+| `pve-c` | `10.10.10.13` | `10.10.20.13` | Site C (optional `10.10.30.13`) |
 | Default gateway (per site LAN) | `10.10.10.1` | — | Usually the site router / VPN appliance |
 
 Public / WAN examples (documentation only): `192.0.2.10`, `192.0.2.20`, `192.0.2.30` (RFC 5737 TEST-NET-1).
@@ -52,12 +52,14 @@ Public / WAN examples (documentation only): `192.0.2.10`, `192.0.2.20`, `192.0.2
 
 | VM | Example IP | Stack |
 | --- | --- | --- |
-| `webdb-a1` / `webdb-a2` | `10.10.40.21` / `.22` | Apache, PHP, MariaDB, ProxySQL, HAProxy, Keepalived, Syncthing |
-| `webdb-b1` / `webdb-b2` | `10.10.40.31` / `.32` | same |
-| `webdb-c1` / `webdb-c2` | `10.10.40.41` / `.42` | same |
-| `pbs-a` / `pbs-b` / `pbs-c` | `10.10.30.21` / `.22` / `.23` | Proxmox Backup Server (storage VLAN or mgmt — pick one and stick to it) |
+| `webdb-a1` | `10.10.40.21` | Apache, PHP, MariaDB (Galera), ProxySQL, HAProxy, Keepalived, Syncthing |
+| `webdb-b1` | `10.10.40.31` | same (Galera member 2) |
+| `webdb-c1` | `10.10.40.41` | same (Galera member 3) |
+| `pbs-a` / `pbs-b` / `pbs-c` | `10.10.30.21` / `.22` / `.23` | Proxmox Backup Server on storage VLAN |
 
-Guest sizing used in a similar production layout (indicative, not a benchmark): app VM ~24 GB RAM / 2 vCPU / ~100 GB disk; PBS VM ~12 GB RAM / 2 vCPU / larger datastore disk. **TODO:** record your exact sizes.
+Optional second app VM per site (`.22` / `.32` / `.42`) can be added later; the published configs use the three primaries above.
+
+Guest vCPU / RAM / disk: **TODO** (fill from your inventory — do not publish unverified sizes).
 
 ### Service VIP
 
@@ -69,22 +71,22 @@ HTTP on the VIP is terminated/balanced by HAProxy (port 80 → backends on port 
 
 ### WireGuard overlay (example)
 
-| Peer | WG address | Routes into tunnel |
+| Peer | Interface `Address` | Peer `AllowedIPs` (examples) |
 | --- | --- | --- |
-| Site A | `10.10.50.1/32` | Site A LAN prefixes |
-| Site B | `10.10.50.2/32` | Site B LAN prefixes |
-| Site C | `10.10.50.3/32` | Site C LAN prefixes |
+| Site A | `10.10.50.1/24` | `10.10.50.2/32`, `10.10.50.3/32`, plus remote host routes |
+| Site B | `10.10.50.2/24` | peers A/C as `/32` plus remote host routes |
+| Site C | `10.10.50.3/24` | peers A/B as `/32` plus remote host routes |
 
-Private keys: `<CHANGE_ME>` — never commit. Endpoint hostnames/IPs: use `192.0.2.x` or `<CHANGE_ME_ENDPOINT>` in published configs.
+Private keys: `<PRIVATE_KEY>` / `<PUBLIC_KEY>` — never commit. WAN endpoints in samples: `192.0.2.10`, `.20`, `.30` (RFC 5737).
 
 ## Logical data path
 
 1. Client → **VIP** `10.10.40.10`.
 2. **Keepalived** ensures the VIP sits on a healthy app VM (HAProxy process check).
 3. **HAProxy** distributes to healthy `webdb-*` backends.
-4. PHP talks to **ProxySQL** on `127.0.0.1:6033` (not raw `root@3306`).
+4. PHP talks to **ProxySQL** on `127.0.0.1:6033` (application DB user — not the MariaDB OS admin via socket).
 5. ProxySQL prefers local MariaDB for writes; Galera certifies to the ring.
-6. **Syncthing** keeps `/var/www/html` aligned; **Gitea** is the source of truth for git workflows.
+6. **Syncthing** keeps the web document root aligned; **Gitea** is the source of truth for git workflows.
 
 ## Storage notes
 

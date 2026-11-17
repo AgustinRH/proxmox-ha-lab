@@ -13,7 +13,7 @@ flowchart TB
   users[Users / office clients]
 
   subgraph edge [Edge]
-    VIP["Service VIP<br/>10.10.50.10<br/>Keepalived VRRP"]
+    VIP["Service VIP<br/>10.10.40.10<br/>Keepalived VRRP"]
     HAP_A[HAProxy site-a]
     HAP_B[HAProxy site-b]
     HAP_C[HAProxy site-c]
@@ -26,34 +26,30 @@ flowchart TB
     subgraph sa [Site A]
       PVE_A[pve-a]
       WEB_A1[webdb-a1]
-      WEB_A2[webdb-a2]
       PBS_A[pbs-a]
     end
     subgraph sb [Site B]
       PVE_B[pve-b]
       WEB_B1[webdb-b1]
-      WEB_B2[webdb-b2]
       PBS_B[pbs-b]
     end
     subgraph sc [Site C]
       PVE_C[pve-c]
       WEB_C1[webdb-c1]
-      WEB_C2[webdb-c2]
       PBS_C[pbs-c]
     end
   end
 
-  subgraph data [MariaDB Galera]
-    G1[(Galera a1/a2)]
-    G2[(Galera b1/b2)]
-    G3[(Galera c1/c2)]
+  subgraph data [MariaDB Galera — 3 members]
+    G1[(galera-a1)]
+    G2[(galera-b1)]
+    G3[(galera-c1)]
   end
 
   WG[WireGuard site-to-site mesh]
 
   users --> VIP
   HAP_A --> WEB_A1
-  HAP_A --> WEB_A2
   HAP_B --> WEB_B1
   HAP_C --> WEB_C1
   WEB_A1 --- G1

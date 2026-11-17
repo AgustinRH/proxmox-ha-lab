@@ -18,9 +18,9 @@ Align with production habits; fill exact cron from your UI:
 
 | Job | Node | VMs included | Mode | Interval |
 | --- | --- | --- | --- | --- |
-| `webs-a` | `pve-a` | `webdb-a1`, `webdb-a2` | snapshot | every **2 hours** (example) |
-| `webs-b` | `pve-b` | `webdb-b1`, `webdb-b2` | snapshot | every 2 hours |
-| `webs-c` | `pve-c` | `webdb-c1`, `webdb-c2` | snapshot | every 2 hours |
+| `webs-a` | `pve-a` | `webdb-a1` (+ optional `webdb-a2`) | snapshot | **TODO** (cron / PBS schedule) |
+| `webs-b` | `pve-b` | `webdb-b1` (+ optional `webdb-b2`) | snapshot | **TODO** |
+| `webs-c` | `pve-c` | `webdb-c1` (+ optional `webdb-c2`) | snapshot | **TODO** |
 
 Usually **exclude** PBS VMs and monitoring VMs from these jobs unless you have a separate policy.
 
