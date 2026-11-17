@@ -90,7 +90,7 @@ Trade-off: you need majority quorum (or a carefully tested last-man procedure). 
 
 ### Why Keepalived VIPs in front of HAProxy?
 
-Clients only need one address (`10.99.0.10`). Keepalived moves that `/32` when the owner or its HAProxy health check fails. HAProxy on the **winning VM** spreads HTTP to healthy backends. With sites on different L3 prefixes, VRRP uses **unicast** peers (`unicast_src_ip` / `unicast_peer`) instead of multicast on a stretched VLAN.
+Clients only need one address (`10.99.0.10`). Keepalived moves that `/32` when the owner or its HAProxy health check fails. HAProxy on the **winning VM** spreads HTTP to healthy backends. With sites on different L3 prefixes, VRRP uses **unicast** peers (`unicast_src_ip` / `unicast_peer`) instead of multicast on a stretched VLAN. After each VIP change, `notify-vip-wg.sh` updates WireGuard **AllowedIPs** and the host route on site gateways — a plain `ip route` is not enough, because WG cryptokey routing drops any `/32` not listed for a peer.
 
 All Keepalived instances use **state BACKUP** with distinct priorities so the preferred site wins when healthy, without a sticky MASTER that refuses to yield. See `configs/keepalived/`.
 
@@ -106,8 +106,8 @@ Three failure domains mean the cluster can lose one entire site and still hold m
 
 | Scenario | Expected behaviour |
 | --- | --- |
-| **One Proxmox node down** | Remaining nodes keep quorum. Guests on the failed node stay down unless HA is configured for that VM. VIP moves if that site’s app VM held it. Galera shrinks; survivors stay `Primary`/`Synced` if majority remains. |
-| **One site down** | Other two sites keep Proxmox + Galera quorum. VIP lands on the next Keepalived priority. Cross-site route to `10.99.0.10/32` must follow the new owner (**TODO** automation). |
+| **One Proxmox node down** | Remaining nodes keep quorum. Guests on the failed node stay down unless HA is configured for that VM. VIP moves if that site’s app VM held it; Keepalived `notify_*` updates WireGuard AllowedIPs + host route for `10.99.0.10/32`. Galera shrinks; survivors stay `Primary`/`Synced` if majority remains. |
+| **One site down** | Other two sites keep Proxmox + Galera quorum. VIP lands on the next Keepalived priority; `notify-vip-wg.sh` moves `10.99.0.10/32` in AllowedIPs/`ip route` on live site gateways. |
 | **Network split** | Majority side stays quorate. Minority must not force votes or `galera_new_cluster`. |
 
 Step-by-step behaviour: [docs/failover.md](docs/failover.md).

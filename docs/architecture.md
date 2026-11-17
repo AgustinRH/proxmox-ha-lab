@@ -4,11 +4,11 @@ All addresses below are **examples** (RFC 1918 / RFC 5737). Replace with your pl
 
 ## Sites and roles
 
-| Site | Proxmox node (example) | Services prefix | Role notes |
+| Site | Proxmox node (example) | Site prefixes | Role notes |
 | --- | --- | --- | --- |
-| Site A | `pve-a` | `10.10.0.0/16` style `/24`s below | Preferred VIP owner (highest Keepalived priority) |
-| Site B | `pve-b` | `10.20.x.0/24` | Second in VIP preference chain |
-| Site C | `pve-c` | `10.30.x.0/24` | Third site; full peer in the same Proxmox cluster |
+| Site A | `pve-a` | `10.10.10/20/30/40.0/24` | Preferred VIP owner (highest Keepalived priority) |
+| Site B | `pve-b` | `10.20.10/20/30/40.0/24` | Second in VIP preference chain |
+| Site C | `pve-c` | `10.30.10/20/30/40.0/24` | Third site; full peer in the same Proxmox cluster |
 
 There is **no stretched L2** between sites. Each site owns distinct RFC1918 `/24`s. VRRP uses **unicast** peers. WireGuard carries inter-site traffic with `AllowedIPs` set to those site prefixes (not a shared `10.10.40.0/24` everywhere).
 
@@ -40,9 +40,21 @@ Do not mix Corosync onto a congested user VLAN. Keep mgmt reachable if services 
 
 ## Example IP plan
 
+### Site routers (WireGuard endpoints)
+
+Each site has a **router / gateway** that owns `.1` on every local VLAN and terminates WireGuard. App VMs and Proxmox hosts reach other sites (Galera, unicast VRRP, HAProxy backends, Corosync) **through that router**, not by running WG on every guest.
+
+| Site | Mgmt `.1` | Cluster `.1` | Storage `.1` | Services `.1` | WG overlay |
+| --- | --- | --- | --- | --- | --- |
+| A | `10.10.10.1` | `10.10.20.1` | `10.10.30.1` | `10.10.40.1` | `10.255.50.1` |
+| B | `10.20.10.1` | `10.20.20.1` | `10.20.30.1` | `10.20.40.1` | `10.255.50.2` |
+| C | `10.30.10.1` | `10.30.20.1` | `10.30.30.1` | `10.30.40.1` | `10.255.50.3` |
+
+The router may be a dedicated appliance, a firewall VM, or a Proxmox host acting as gateway — deployment choice. Published `wg0-site-*.conf` files belong on these endpoints.
+
 ### Hypervisors
 
-| Host | Mgmt | Cluster | Optional storage host IP | Gateway (mgmt) |
+| Host | Mgmt | Cluster | Optional storage host IP | Default gw (mgmt) |
 | --- | --- | --- | --- | --- |
 | `pve-a` | `10.10.10.11` | `10.10.20.11` | `10.10.30.11` | `10.10.10.1` |
 | `pve-b` | `10.20.10.11` | `10.20.20.11` | `10.20.30.11` | `10.20.10.1` |
@@ -52,12 +64,12 @@ Public / WAN examples (documentation only): `192.0.2.10`, `192.0.2.20`, `192.0.2
 
 ### Guests
 
-| VM | IP | Notes |
-| --- | --- | --- |
-| `webdb-a1` | `10.10.40.21` | Site A app + Galera member `galera-a1` (same VM) |
-| `webdb-b1` | `10.20.40.21` | Site B app + `galera-b1` |
-| `webdb-c1` | `10.30.40.21` | Site C app + `galera-c1` |
-| `pbs-a` / `pbs-b` / `pbs-c` | `10.10.30.21` / `10.20.30.21` / `10.30.30.21` | PBS on storage VLAN |
+| VM | IP | Gateway (services) | Notes |
+| --- | --- | --- | --- |
+| `webdb-a1` | `10.10.40.21` | `10.10.40.1` | Site A app + Galera member `galera-a1` (same VM) |
+| `webdb-b1` | `10.20.40.21` | `10.20.40.1` | Site B app + `galera-b1` |
+| `webdb-c1` | `10.30.40.21` | `10.30.40.1` | Site C app + `galera-c1` |
+| `pbs-a` / `pbs-b` / `pbs-c` | `10.10.30.21` / `10.20.30.21` / `10.30.30.21` | site storage `.1` | PBS on storage VLAN |
 
 Guest vCPU / RAM / disk: **TODO** (fill from your inventory).
 
@@ -71,29 +83,33 @@ Optional second app VM per site (e.g. `10.10.40.22`) can be added later; publish
 
 #### How the VIP is reached after failover
 
-1. **Keepalived (unicast VRRP)** moves `10.99.0.10/32` onto whichever app VM currently wins (priority + HAProxy health). There is no shared L2, so every instance sets `unicast_src_ip` and `unicast_peer` to the other app VMs’ services addresses.
-2. **Local clients on the winning site** reach `10.99.0.10` as a local address on that VM (or via the site router).
-3. **Clients on other sites** need a route for `10.99.0.10/32` toward the site that currently owns the VIP (typically via WireGuard to that site’s gateway/`webdb`).  
-   - Static example configs **do not** pin `10.99.0.10/32` under only Site A’s peer.  
-   - **TODO:** how you inject/withdraw that `/32` (manual route on failover drill, DNS update, or dynamic routing). Document your chosen method in private ops notes.
-4. HAProxy on the VIP owner listens on `:80` and load-balances to the three app backends over the WireGuard-connected services prefixes.
+1. **Keepalived (unicast VRRP)** moves `10.99.0.10/32` onto whichever app VM currently wins (priority + HAProxy health). There is no shared L2, so every instance sets `unicast_src_ip` and `unicast_peer` to the other app VMs’ services addresses. Unicast VRRP packets leave the services VLAN via the site router and cross WireGuard to the remote services `/24`.
+2. **Local clients on the winning site** reach `10.99.0.10` via a host route on the site router pointing at the winning `webdb-*` (e.g. `10.10.40.21`).
+3. **Clients on other sites** need both:
+   - `10.99.0.10/32` in the **WireGuard `AllowedIPs`** of the peer that owns the VIP, and
+   - a matching **host route** on each site gateway toward that peer’s WG address.
+4. **Documented example (this repo):** Keepalived `notify_master` / `notify_backup` / `notify_fault` run [`configs/keepalived/notify-vip-wg.sh`](../configs/keepalived/notify-vip-wg.sh). On MASTER the script SSHes to **remote** site routers and runs `wg set … allowed-ips` (site prefixes **plus** `10.99.0.10/32` on the winning peer) and `ip route replace 10.99.0.10/32 via <peer-wg>`; on the **local** site router it installs `ip route … via <webdb>`. On BACKUP/FAULT it strips the `/32` from **this site’s** peer AllowedIPs only (so a late notify cannot undo the new MASTER) and removes the local VIP→webdb route. Static `wg0-site-*.conf` files intentionally **omit** the VIP from AllowedIPs.
+5. **Why `ip route` alone is not enough:** WireGuard cryptokey routing encrypts a packet toward a peer only if the destination is covered by that peer’s AllowedIPs. Without updating AllowedIPs, the tunnel ignores the `/32` even if the kernel has a host route.
+6. HAProxy on the VIP owner listens on `:80` and load-balances to the three app backends over the WireGuard-connected services prefixes.
 
 ### WireGuard overlay
 
-| Peer | Interface `Address` | `AllowedIPs` to that peer (site prefixes) |
+| Peer | Interface `Address` | Static `AllowedIPs` to that peer (site prefixes only) |
 | --- | --- | --- |
 | Site A | `10.255.50.1/24` | `10.10.10.0/24`, `10.10.20.0/24`, `10.10.30.0/24`, `10.10.40.0/24` |
 | Site B | `10.255.50.2/24` | `10.20.10.0/24`, `10.20.20.0/24`, `10.20.30.0/24`, `10.20.40.0/24` |
 | Site C | `10.255.50.3/24` | `10.30.10.0/24`, `10.30.20.0/24`, `10.30.30.0/24`, `10.30.40.0/24` |
 
+`10.99.0.10/32` is **not** in these static lists; `notify-vip-wg.sh` adds/withdraws it at failover.
+
 Private keys: `<PRIVATE_KEY>` / `<PUBLIC_KEY>` — never commit. WAN endpoints in samples: `192.0.2.10`, `.20`, `.30`.
 
 ## Logical data path
 
-1. Client → VIP `10.99.0.10` (on the current Keepalived winner).
+1. Client → VIP `10.99.0.10` (on the current Keepalived winner; remote sites via WG AllowedIPs + host route).
 2. **HAProxy** on that same VM distributes to healthy `webdb-*` backends (`:8080`).
 3. PHP talks to **ProxySQL** on `127.0.0.1:6033` (application DB user).
-4. ProxySQL prefers local MariaDB; Galera certifies across `10.10.40.21` / `10.20.40.21` / `10.30.40.21`.
+4. ProxySQL prefers local MariaDB; Galera certifies across `10.10.40.21` / `10.20.40.21` / `10.30.40.21` (via site routers + WireGuard).
 5. **Syncthing** keeps the web document root aligned; **Gitea** is the git source of truth.
 
 ## Storage notes

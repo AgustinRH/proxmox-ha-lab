@@ -25,25 +25,28 @@ This describes the **intended** behaviour of the three-site design. Adjust names
 ### How to test (maintenance window)
 
 1. Confirm baseline: `pvecm status`, VIP ping, app HTTP 200, Galera size/status on two app VMs.
-2. Gracefully shut down **one** Proxmox node (or `systemctl poweroff` after migrating nothing — this test is about loss).
-3. Within ~30s: cluster still quorate; VIP reachable; HTTP OK; Galera `Primary` on survivors.
-4. Power the node back; wait for Corosync rejoin; start guests if `onboot` is set; confirm Galera nodes return to `Synced` without `galera_new_cluster`.
+2. On a **live** site gateway: `wg show` — note whether `10.99.0.10/32` appears under the current VIP owner’s peer AllowedIPs (set by `notify-vip-wg.sh`).
+3. Gracefully shut down **one** Proxmox node (or `systemctl poweroff` after migrating nothing — this test is about loss).
+4. Within ~30s: cluster still quorate; VIP reachable from **another site**; HTTP OK; Galera `Primary` on survivors.
+5. If the down node held the VIP owner: on remaining gateways, confirm `wg show` now lists `10.99.0.10/32` under the **new** owner’s peer, and `ip route get 10.99.0.10` points via that peer’s WG address.
+6. Power the node back; wait for Corosync rejoin; start guests if `onboot` is set; confirm Galera nodes return to `Synced` without `galera_new_cluster`.
 
 ## Scenario B — one entire site down
 
 ### What should happen
 
 1. Same as losing that site’s Proxmox vote(s) and all of its VMs.
-2. VIP `10.99.0.10/32` moves via Keepalived unicast VRRP (example priority chain: site A → B → C). Point the cross-site host route for that `/32` at the new owner (**TODO** automation).
+2. VIP `10.99.0.10/32` moves via Keepalived unicast VRRP (example priority chain: site A → B → C). The new master’s `notify_master` runs [`notify-vip-wg.sh`](../configs/keepalived/notify-vip-wg.sh), which updates every live site gateway: `wg set … allowed-ips` (site prefixes + `10.99.0.10/32` on the winning peer) and `ip route replace 10.99.0.10/32 via <peer-wg>`. The previous owner’s `notify_backup` / `notify_fault` withdraws the `/32` if that node is still up long enough to run the script.
 3. Galera remains writable if remaining members > half of total members.
 4. Syncthing/Gitea peers at the live sites keep serving; the down site resyncs on return.
 
 ### How to test
 
 1. Prefer simulating **network isolation** of the site (firewall drop / unplug WAN+overlay) before pulling power, so you can observe minority behaviour safely.
-2. From a client on a live site: VIP and app still work.
-3. On the isolated site: confirm it does **not** open a second Galera primary (gateway check should block last-man if the site cannot reach the shared gateway design you use — if each site has only a local gateway, revisit the helper logic before enabling it).
-4. Restore connectivity; members should join the existing Primary.
+2. From a client on a live site: VIP and app still work (`ping` / HTTP to `10.99.0.10`).
+3. On a live site gateway: `wg show <iface>` — AllowedIPs for the **new** owner peer include `10.99.0.10/32`; the failed site’s peer does **not**. Also check `ip route get 10.99.0.10`.
+4. On the isolated site: confirm it does **not** open a second Galera primary (gateway check should block last-man if the site cannot reach the shared gateway design you use — if each site has only a local gateway, revisit the helper logic before enabling it).
+5. Restore connectivity; members should join the existing Primary; after Keepalived settles, AllowedIPs/`ip route` again match the current VIP owner.
 
 ## Scenario C — network split (two sites vs one, or 50/50 with even votes)
 
