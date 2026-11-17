@@ -27,14 +27,14 @@ Optional helper script pattern: print `1` only when local node is usable for app
 ```bash
 systemctl is-active haproxy keepalived
 # On the VIP owner: ip -br addr | grep <VIP>
-curl -fsS -o /dev/null -w '%{http_code}\n' http://10.10.40.10/
+curl -fsS -o /dev/null -w '%{http_code}\n' http://10.99.0.10/
 ```
 
 ### WireGuard
 
 ```bash
 sudo wg show
-ping -c 3 10.10.50.2   # peer example
+ping -c 3 10.255.50.2   # Site B overlay peer example
 ```
 
 ## Adding a Proxmox node

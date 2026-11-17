@@ -10,7 +10,7 @@
 
 Each node registers a storage entry such as `pbs-a` pointing at its local PBS. **Do not** expect one backup job to write to foreign PBS instances that only exist on other nodes.
 
-PBS UI (example): `https://10.10.30.21:8007` — user `<CHANGE_ME>`.
+PBS UI (examples): `https://10.10.30.21:8007` (site A), `https://10.20.30.21:8007` (site B), `https://10.30.30.21:8007` (site C) — user `<CHANGE_ME>`.
 
 ## Schedule (template)
 

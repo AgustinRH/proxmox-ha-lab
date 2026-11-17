@@ -4,95 +4,103 @@ All addresses below are **examples** (RFC 1918 / RFC 5737). Replace with your pl
 
 ## Sites and roles
 
-| Site | Proxmox node (example) | Role notes |
-| --- | --- | --- |
-| Site A | `pve-a` | Preferred VIP owner (highest Keepalived priority on its primary app VM) |
-| Site B | `pve-b` | Second in VIP / ops preference chain |
-| Site C | `pve-c` | Third site; full peer in the same Proxmox cluster |
+| Site | Proxmox node (example) | Services prefix | Role notes |
+| --- | --- | --- | --- |
+| Site A | `pve-a` | `10.10.0.0/16` style `/24`s below | Preferred VIP owner (highest Keepalived priority) |
+| Site B | `pve-b` | `10.20.x.0/24` | Second in VIP preference chain |
+| Site C | `pve-c` | `10.30.x.0/24` | Third site; full peer in the same Proxmox cluster |
 
-Production can place **two** hypervisors per site for extra capacity; this portfolio documents the minimal **one node per site** shape. Scale the same patterns (local PBS, local Galera members, Corosync votes) when you add nodes.
+There is **no stretched L2** between sites. Each site owns distinct RFC1918 `/24`s. VRRP uses **unicast** peers. WireGuard carries inter-site traffic with `AllowedIPs` set to those site prefixes (not a shared `10.10.40.0/24` everywhere).
+
+Production can place **two** hypervisors per site for extra capacity; this portfolio documents **one node per site**. Scale the same patterns when you add nodes.
 
 ## Physical links
 
 Each Proxmox node:
 
-| Link | Speed | Typical use |
+| Link | Speed | VLANs (example) |
 | --- | --- | --- |
-| NIC 0 | 10GbE | Tagged trunk: mgmt + services (+ optional WAN handoff) |
-| NIC 1 | 10GbE | Tagged trunk: cluster (Corosync) + storage replication / backup |
+| NIC 0 (`eno1`) | 10GbE | VLAN 10 mgmt + VLAN 40 services |
+| NIC 1 (`eno2`) | 10GbE | VLAN 20 cluster/Corosync + VLAN 30 storage |
 
-Bonding mode and switch config: **TODO**.
+**Bonding:** the published `configs/proxmox/network-interfaces.example` does **not** use bonding. Each NIC carries its VLAN subinterfaces directly, matching the split above. If you later team two NICs per fabric, LACP/`802.3ad` needs **at least two slaves per bond** and matching switch config — that remains a deployment-specific **TODO**, not part of this example.
 
-## VLAN segmentation
+## VLAN segmentation (same VLAN IDs, different prefixes per site)
 
-| VLAN ID (example) | Name | Purpose | Example CIDR |
-| --- | --- | --- | --- |
-| 10 | `mgmt` | Proxmox UI/SSH, PBS UI, monitoring agents | `10.10.10.0/24` |
-| 20 | `cluster` | Corosync / cluster traffic only | `10.10.20.0/24` |
-| 30 | `storage` | Backup and optional disk replication | `10.10.30.0/24` |
-| 40 | `services` | App VMs, VIP, Syncthing, Gitea | `10.10.40.0/24` |
-| 50 | `vpn-overlay` | WireGuard addressed endpoints (optional dedicated) | `10.10.50.0/24` |
+| VLAN ID | Name | Purpose | Site A | Site B | Site C |
+| --- | --- | --- | --- | --- | --- |
+| 10 | `mgmt` | Proxmox UI/SSH, monitoring | `10.10.10.0/24` | `10.20.10.0/24` | `10.30.10.0/24` |
+| 20 | `cluster` | Corosync only | `10.10.20.0/24` | `10.20.20.0/24` | `10.30.20.0/24` |
+| 30 | `storage` | PBS / backup path | `10.10.30.0/24` | `10.20.30.0/24` | `10.30.30.0/24` |
+| 40 | `services` | App VMs | `10.10.40.0/24` | `10.20.40.0/24` | `10.30.40.0/24` |
+
+WireGuard overlay (not a site LAN): `10.255.50.0/24` (example peer addresses `.1` / `.2` / `.3`).
 
 Do not mix Corosync onto a congested user VLAN. Keep mgmt reachable if services VLAN misbehaves.
 
 ## Example IP plan
 
-### Hypervisors (mgmt)
+### Hypervisors
 
-| Host | Mgmt IP | Cluster IP | Notes |
-| --- | --- | --- | --- |
-| `pve-a` | `10.10.10.11` | `10.10.20.11` | Site A (optional storage host IP `10.10.30.11`) |
-| `pve-b` | `10.10.10.12` | `10.10.20.12` | Site B (optional `10.10.30.12`) |
-| `pve-c` | `10.10.10.13` | `10.10.20.13` | Site C (optional `10.10.30.13`) |
-| Default gateway (per site LAN) | `10.10.10.1` | — | Usually the site router / VPN appliance |
+| Host | Mgmt | Cluster | Optional storage host IP | Gateway (mgmt) |
+| --- | --- | --- | --- | --- |
+| `pve-a` | `10.10.10.11` | `10.10.20.11` | `10.10.30.11` | `10.10.10.1` |
+| `pve-b` | `10.20.10.11` | `10.20.20.11` | `10.20.30.11` | `10.20.10.1` |
+| `pve-c` | `10.30.10.11` | `10.30.20.11` | `10.30.30.11` | `10.30.10.1` |
 
 Public / WAN examples (documentation only): `192.0.2.10`, `192.0.2.20`, `192.0.2.30` (RFC 5737 TEST-NET-1).
 
-### Guests per node (services VLAN)
+### Guests
 
-| VM | Example IP | Stack |
+| VM | IP | Notes |
 | --- | --- | --- |
-| `webdb-a1` | `10.10.40.21` | Apache, PHP, MariaDB (Galera), ProxySQL, HAProxy, Keepalived, Syncthing |
-| `webdb-b1` | `10.10.40.31` | same (Galera member 2) |
-| `webdb-c1` | `10.10.40.41` | same (Galera member 3) |
-| `pbs-a` / `pbs-b` / `pbs-c` | `10.10.30.21` / `.22` / `.23` | Proxmox Backup Server on storage VLAN |
+| `webdb-a1` | `10.10.40.21` | Site A app + Galera member `galera-a1` (same VM) |
+| `webdb-b1` | `10.20.40.21` | Site B app + `galera-b1` |
+| `webdb-c1` | `10.30.40.21` | Site C app + `galera-c1` |
+| `pbs-a` / `pbs-b` / `pbs-c` | `10.10.30.21` / `10.20.30.21` / `10.30.30.21` | PBS on storage VLAN |
 
-Optional second app VM per site (`.22` / `.32` / `.42`) can be added later; the published configs use the three primaries above.
+Guest vCPU / RAM / disk: **TODO** (fill from your inventory).
 
-Guest vCPU / RAM / disk: **TODO** (fill from your inventory — do not publish unverified sizes).
+Optional second app VM per site (e.g. `10.10.40.22`) can be added later; published configs use the three primaries above.
 
-### Service VIP
+### Service VIP (floating, not inside one site `/24`)
 
-| Name | Example | Owner |
+| Name | Address | Notes |
 | --- | --- | --- |
-| Application VIP | `10.10.40.10` | Keepalived; preferred on `webdb-a1`, then falling priorities on other app VMs |
+| Application VIP | `10.99.0.10/32` | Keepalived secondary address on the winning app VM |
 
-HTTP on the VIP is terminated/balanced by HAProxy (port 80 → backends on port 8080 is a common pattern so Apache is not competing for :80 on the VIP host).
+#### How the VIP is reached after failover
 
-### WireGuard overlay (example)
+1. **Keepalived (unicast VRRP)** moves `10.99.0.10/32` onto whichever app VM currently wins (priority + HAProxy health). There is no shared L2, so every instance sets `unicast_src_ip` and `unicast_peer` to the other app VMs’ services addresses.
+2. **Local clients on the winning site** reach `10.99.0.10` as a local address on that VM (or via the site router).
+3. **Clients on other sites** need a route for `10.99.0.10/32` toward the site that currently owns the VIP (typically via WireGuard to that site’s gateway/`webdb`).  
+   - Static example configs **do not** pin `10.99.0.10/32` under only Site A’s peer.  
+   - **TODO:** how you inject/withdraw that `/32` (manual route on failover drill, DNS update, or dynamic routing). Document your chosen method in private ops notes.
+4. HAProxy on the VIP owner listens on `:80` and load-balances to the three app backends over the WireGuard-connected services prefixes.
 
-| Peer | Interface `Address` | Peer `AllowedIPs` (examples) |
+### WireGuard overlay
+
+| Peer | Interface `Address` | `AllowedIPs` to that peer (site prefixes) |
 | --- | --- | --- |
-| Site A | `10.10.50.1/24` | `10.10.50.2/32`, `10.10.50.3/32`, plus remote host routes |
-| Site B | `10.10.50.2/24` | peers A/C as `/32` plus remote host routes |
-| Site C | `10.10.50.3/24` | peers A/B as `/32` plus remote host routes |
+| Site A | `10.255.50.1/24` | `10.10.10.0/24`, `10.10.20.0/24`, `10.10.30.0/24`, `10.10.40.0/24` |
+| Site B | `10.255.50.2/24` | `10.20.10.0/24`, `10.20.20.0/24`, `10.20.30.0/24`, `10.20.40.0/24` |
+| Site C | `10.255.50.3/24` | `10.30.10.0/24`, `10.30.20.0/24`, `10.30.30.0/24`, `10.30.40.0/24` |
 
-Private keys: `<PRIVATE_KEY>` / `<PUBLIC_KEY>` — never commit. WAN endpoints in samples: `192.0.2.10`, `.20`, `.30` (RFC 5737).
+Private keys: `<PRIVATE_KEY>` / `<PUBLIC_KEY>` — never commit. WAN endpoints in samples: `192.0.2.10`, `.20`, `.30`.
 
 ## Logical data path
 
-1. Client → **VIP** `10.10.40.10`.
-2. **Keepalived** ensures the VIP sits on a healthy app VM (HAProxy process check).
-3. **HAProxy** distributes to healthy `webdb-*` backends.
-4. PHP talks to **ProxySQL** on `127.0.0.1:6033` (application DB user — not the MariaDB OS admin via socket).
-5. ProxySQL prefers local MariaDB for writes; Galera certifies to the ring.
-6. **Syncthing** keeps the web document root aligned; **Gitea** is the source of truth for git workflows.
+1. Client → VIP `10.99.0.10` (on the current Keepalived winner).
+2. **HAProxy** on that same VM distributes to healthy `webdb-*` backends (`:8080`).
+3. PHP talks to **ProxySQL** on `127.0.0.1:6033` (application DB user).
+4. ProxySQL prefers local MariaDB; Galera certifies across `10.10.40.21` / `10.20.40.21` / `10.30.40.21`.
+5. **Syncthing** keeps the web document root aligned; **Gitea** is the git source of truth.
 
 ## Storage notes
 
-- VM disks live on **local LVM-thin** (or equivalent) on each node’s data disk — not on the OS `local-lvm` by default.
-- Each Proxmox node backs up to **its own** PBS datastore (`pbs-a`, `pbs-b`, `pbs-c`). One job cannot target six foreign datastores that only exist on other nodes.
-- Optional: ZFS/replication for a monitoring VM with HA affinity — **TODO** if you publish that piece.
+- VM disks live on **local LVM-thin** (or equivalent) on each node’s data disk — not on the OS system VG by default.
+- Each Proxmox node backs up to **its own** PBS datastore. One job cannot target PBS instances that only exist on other nodes.
+- Optional monitoring HA / ZFS: **TODO** if you publish that piece.
 
 ## Related docs
 

@@ -1,7 +1,11 @@
-# Corosync example for a 3-node Proxmox cluster
-# Live file is usually /etc/pve/corosync.conf (replicated) + /etc/corosync/corosync.conf
-# Do NOT invent a totem version by hand on a running cluster — use pvecm.
-# This file is a readable example matching docs/architecture.md.
+# Corosync / knet-style EXAMPLE for a 3-node Proxmox cluster
+#
+# DO NOT hand-edit a live cluster's corosync.conf to "make it look like this".
+# Create/join nodes with pvecm (or the Datacenter UI). Use this file only as a
+# readable reference of roles and ring0 addresses from docs/architecture.md.
+#
+# Live paths are typically /etc/pve/corosync.conf (replicated) and
+# /etc/corosync/corosync.conf on each node.
 
 logging {
   debug: off
@@ -10,44 +14,38 @@ logging {
 
 nodelist {
   node {
-    # Site A — cluster VLAN IP
     name: pve-a
     nodeid: 1
     quorum_votes: 1
+    # Site A cluster VLAN
     ring0_addr: 10.10.20.11
   }
   node {
-    # Site B
     name: pve-b
     nodeid: 2
     quorum_votes: 1
-    ring0_addr: 10.10.20.12
+    ring0_addr: 10.20.20.11
   }
   node {
-    # Site C
     name: pve-c
     nodeid: 3
     quorum_votes: 1
-    ring0_addr: 10.10.20.13
+    ring0_addr: 10.30.20.11
   }
 }
 
 quorum {
   provider: corosync_votequorum
-  # With 3 votes, expected 3 when all up; majority = 2
-  expected_votes: 3
-  # Optional: lowest nodeid breaks ties — document any custom last-man helper separately
-  # auto_tie_breaker: 1
+  # Do not hard-code expected_votes here for day-2 ops; let the cluster
+  # manage votes via pvecm. With 3 nodes, majority is 2 while all are up.
 }
 
 totem {
   version: 2
-  # Unique cluster name token (not a secret, but keep stable)
   cluster_name: lab-pve
-  # Transport over the cluster VLAN IPs above
-  # secauth / crypto settings per your Proxmox generation — leave defaults from pvecm
+  # Modern Proxmox releases use knet transport by default when created via pvecm
+  transport: knet
   interface {
-    # Link 0 uses ring0_addr from each node
     linknumber: 0
   }
 }

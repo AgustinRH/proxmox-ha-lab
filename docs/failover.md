@@ -71,7 +71,7 @@ qm list
 On an app VM:
 
 ```bash
-ip -br addr show | grep 10.10.40.10   # VIP example
+ip -br addr show | grep 10.99.0.10   # floating VIP example
 systemctl is-active haproxy keepalived mariadb
 mysql --batch --skip-column-names -e \
   "SHOW STATUS WHERE Variable_name IN ('wsrep_cluster_status','wsrep_local_state_comment','wsrep_cluster_size');"

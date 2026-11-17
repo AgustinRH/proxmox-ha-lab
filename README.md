@@ -2,9 +2,9 @@
 
 Portfolio documentation for a **three-site high-availability** stack I designed and operate in production (details anonymized).
 
-One Proxmox VE cluster spans three geographic sites. Application traffic lands on a floating VIP (Keepalived / VRRP) in front of HAProxy. Data is a synchronous MariaDB Galera ring. Sites talk over WireGuard. Backups go to Proxmox Backup Server. Internal git and web content sync use Gitea and Syncthing.
+One Proxmox VE cluster spans three geographic sites. Application traffic lands on a floating VIP (Keepalived / unicast VRRP) in front of HAProxy on the **current** owner VM. Data is a synchronous MariaDB Galera ring (one member per site app VM). Sites talk over WireGuard with **per-site RFC1918 prefixes** (no stretched L2). Backups go to Proxmox Backup Server. Internal git and web content sync use Gitea and Syncthing.
 
-> **Anonymization.** No real company name, hostnames, domains, public IPs, usernames or passwords. Addresses use RFC 1918 / RFC 5737 examples (`10.10.x.x`, `192.0.2.x`). Secrets are `<CHANGE_ME>`. Open `TODO` markers are left where production values belong.
+> **Anonymization.** No real company name, hostnames, domains, public IPs, usernames or passwords. Addresses use RFC 1918 / RFC 5737 examples. Secrets are placeholders (`<CHANGE_ME>`, `<PRIVATE_KEY>`, …). Open `TODO` markers are left where production values belong.
 
 ## Architecture
 
@@ -12,46 +12,42 @@ One Proxmox VE cluster spans three geographic sites. Application traffic lands o
 flowchart TB
   users[Users / office clients]
 
-  subgraph edge [Edge]
-    VIP["Service VIP<br/>10.10.40.10<br/>Keepalived VRRP"]
-    HAP_A[HAProxy site-a]
-    HAP_B[HAProxy site-b]
-    HAP_C[HAProxy site-c]
-    VIP --> HAP_A
-    VIP --> HAP_B
-    VIP --> HAP_C
+  subgraph edge [Edge — VIP on one owner at a time]
+    VIP["VIP 10.99.0.10/32<br/>Keepalived unicast VRRP"]
+    HAP["HAProxy on winning webdb-*"]
+    VIP --> HAP
   end
 
   subgraph sites [Proxmox VE cluster — 3 sites]
-    subgraph sa [Site A]
+    subgraph sa [Site A 10.10.x.0/24]
       PVE_A[pve-a]
-      WEB_A1[webdb-a1]
+      WEB_A1["webdb-a1<br/>+ galera-a1 same VM"]
       PBS_A[pbs-a]
     end
-    subgraph sb [Site B]
+    subgraph sb [Site B 10.20.x.0/24]
       PVE_B[pve-b]
-      WEB_B1[webdb-b1]
+      WEB_B1["webdb-b1<br/>+ galera-b1 same VM"]
       PBS_B[pbs-b]
     end
-    subgraph sc [Site C]
+    subgraph sc [Site C 10.30.x.0/24]
       PVE_C[pve-c]
-      WEB_C1[webdb-c1]
+      WEB_C1["webdb-c1<br/>+ galera-c1 same VM"]
       PBS_C[pbs-c]
     end
   end
 
-  subgraph data [MariaDB Galera — 3 members]
+  subgraph data [MariaDB Galera]
     G1[(galera-a1)]
     G2[(galera-b1)]
     G3[(galera-c1)]
   end
 
-  WG[WireGuard site-to-site mesh]
+  WG[WireGuard site-to-site]
 
   users --> VIP
-  HAP_A --> WEB_A1
-  HAP_B --> WEB_B1
-  HAP_C --> WEB_C1
+  HAP --> WEB_A1
+  HAP --> WEB_B1
+  HAP --> WEB_C1
   WEB_A1 --- G1
   WEB_B1 --- G2
   WEB_C1 --- G3
@@ -66,6 +62,8 @@ flowchart TB
   PVE_C --> PBS_C
 ```
 
+VIP ownership: Keepalived runs on each `webdb-*` with **state BACKUP** and different priorities; only one owns `10.99.0.10/32` at a time. HAProxy that serves the VIP is the instance on that same VM. Galera member `galera-a1` is the MariaDB on `webdb-a1` (not a separate guest).
+
 ## Stack
 
 | Layer | Choice | Role |
@@ -74,9 +72,9 @@ flowchart TB
 | Backup | Proxmox Backup Server (one VM per node) | Snapshot backups of app VMs |
 | Database | MariaDB Galera (synchronous) | Multi-master SQL, quorum-aware |
 | SQL proxy | ProxySQL on each app VM | Local write preference, read fan-out |
-| Edge | HAProxy + Keepalived (VRRP VIP) | L7/L4 distribute + floating service IP |
-| Site links | WireGuard mesh | Encrypted overlay between sites |
-| Switching | VLAN segmentation + 2× 10GbE per node | Mgmt / Corosync / storage / services |
+| Edge | HAProxy + Keepalived (unicast VRRP VIP) | HTTP distribute + floating `10.99.0.10/32` |
+| Site links | WireGuard mesh | Encrypted overlay; `AllowedIPs` = per-site prefixes |
+| Switching | VLAN per NIC role (no single-slave bond in examples) | Mgmt+services on NIC0; cluster+storage on NIC1 |
 | Code & files | Gitea + Syncthing | Internal git; sync of web document root |
 | OS (guests) | Ubuntu LTS on app VMs | Apache / PHP / MariaDB stack |
 
@@ -86,51 +84,51 @@ Exact package versions and disk sizes: **TODO** (fill from your inventory).
 
 ### Why Galera (synchronous)?
 
-The application is a classic LAMP workload that must see the same rows on every site immediately after a write (orders, stock, office screens). Asynchronous replicas would force sticky sessions or accept stale reads across sites. Galera’s certification-based replication keeps a single logical dataset; ProxySQL on each app VM prefers the local MariaDB for writes and fans reads out when healthy.
+The application is a classic LAMP workload that must see the same rows on every site immediately after a write. Asynchronous replicas would force sticky sessions or accept stale reads across sites. Galera keeps a single logical dataset; ProxySQL on each app VM prefers the local MariaDB for writes and fans reads out when healthy.
 
-Trade-off: you need majority quorum (or a carefully tested last-man procedure). Never bootstrap two donors at once — that splits the dataset.
+Trade-off: you need majority quorum (or a carefully tested last-man procedure). Never bootstrap two donors at once.
 
 ### Why Keepalived VIPs in front of HAProxy?
 
-Clients and DNS only know one service address. Keepalived moves that VIP with VRRP when the current owner or its HAProxy health check fails. HAProxy then spreads HTTP to healthy backends. Separating “who owns the IP” from “how requests are balanced” keeps failover fast and avoids teaching every client a list of real servers.
+Clients only need one address (`10.99.0.10`). Keepalived moves that `/32` when the owner or its HAProxy health check fails. HAProxy on the **winning VM** spreads HTTP to healthy backends. With sites on different L3 prefixes, VRRP uses **unicast** peers (`unicast_src_ip` / `unicast_peer`) instead of multicast on a stretched VLAN.
 
-All Keepalived instances can run as `BACKUP` with different priorities so the preferred site wins when it is healthy, without a sticky MASTER that refuses to yield.
+All Keepalived instances use **state BACKUP** with distinct priorities so the preferred site wins when healthy, without a sticky MASTER that refuses to yield. See `configs/keepalived/`.
 
 ### Why WireGuard over IPsec?
 
-Site-to-site needs a small, auditable tunnel that carries Corosync, Galera, Syncthing and admin traffic. WireGuard’s single interface, static keys and simple `AllowedIPs` routing are easier to reason about on Linux routers/VMs than a full IPsec/IKE policy set. For this mesh (three peers), operational simplicity beat feature depth. IPsec remains fine where hardware offload or enterprise VPN gear is mandatory — that was not the constraint here.
+Site-to-site needs a small, auditable tunnel for Corosync, Galera, Syncthing and admin traffic. WireGuard’s static keys and `AllowedIPs` routing are easier to reason about for a three-peer mesh than a full IPsec/IKE policy set. IPsec remains fine where hardware offload or enterprise VPN gear is mandatory.
 
 ### Why three sites for quorum?
 
-Three failure domains mean the cluster can lose one entire site and still hold majority for both Proxmox (Corosync) and Galera, as long as the remaining votes stay connected. Two sites alone make “which half is right?” ambiguous on a clean partition. Odd site count is intentional.
+Three failure domains mean the cluster can lose one entire site and still hold majority for Proxmox and Galera, as long as the remaining votes stay connected. Odd site count is intentional.
 
 ## Failure scenarios
 
 | Scenario | Expected behaviour |
 | --- | --- |
-| **One Proxmox node down** | Remaining nodes keep quorum. Guests on the failed node stay down unless HA is configured for that VM. VIP moves if that node held it. Galera shrinks; survivors stay `Primary`/`Synced` if majority remains. |
-| **One site down** (node + its VMs) | Other two sites keep Proxmox + Galera quorum. VIP lands on the next Keepalived priority. PBS at the lost site is offline; other sites’ backup jobs continue. |
-| **Network split** between sites | The partition that still has majority votes (and can reach its gateway, if you use a last-man helper) remains quorate. The minority side must **not** force `expected votes` or `galera_new_cluster`. WireGuard recovery should rejoin minorities as joiners, not new primaries. |
+| **One Proxmox node down** | Remaining nodes keep quorum. Guests on the failed node stay down unless HA is configured for that VM. VIP moves if that site’s app VM held it. Galera shrinks; survivors stay `Primary`/`Synced` if majority remains. |
+| **One site down** | Other two sites keep Proxmox + Galera quorum. VIP lands on the next Keepalived priority. Cross-site route to `10.99.0.10/32` must follow the new owner (**TODO** automation). |
+| **Network split** | Majority side stays quorate. Minority must not force votes or `galera_new_cluster`. |
 
-Step-by-step behaviour and how to rehearse it: [docs/failover.md](docs/failover.md).
+Step-by-step behaviour: [docs/failover.md](docs/failover.md).
 
 ## What I learned
 
-- **Quorum is a product decision**, not only a checkbox. Corosync, Galera and VRRP each have their own majority rules; documenting which layer “wins” under split-brain saves hours during an outage.
-- **Last-man helpers are sharp tools.** Automatic vote reduction or Galera bootstrap-on-isolation can keep a single site serving — and can also create two primaries if both sides still see a gateway. Gate them on connectivity checks and a strict priority chain.
-- **Backups that never restore are fiction.** PBS jobs per node are simple; a quarterly restore-to-empty-VM test is what makes them real ([docs/backup-and-restore.md](docs/backup-and-restore.md)).
-- **Sync tools hate huge first copies.** Syncthing is excellent for ongoing HTML/PHP drift; the initial multi-gig tree is better as a controlled `tar` while the sync service is stopped.
-- **Config version skew on Corosync** bites nodes that were offline during a `pvecm` change — copy the live `corosync.conf` before blaming the network.
+- **Quorum is a product decision.** Corosync, Galera and VRRP each have their own majority rules.
+- **Stretched L2 is optional debt.** Distinct prefixes + unicast VRRP + WireGuard keep failure domains honest.
+- **Last-man helpers are sharp tools.** Gate them on connectivity checks and a strict priority chain.
+- **Backups that never restore are fiction.** See [docs/backup-and-restore.md](docs/backup-and-restore.md).
+- **Sync tools hate huge first copies.** Syncthing for drift; controlled archive for the initial tree.
 
 ## Documentation map
 
 | Doc | Contents |
 | --- | --- |
-| [docs/architecture.md](docs/architecture.md) | VLANs, example IP plan, links, guest layout |
+| [docs/architecture.md](docs/architecture.md) | Per-site prefixes, VIP reachability, VLANs |
 | [docs/failover.md](docs/failover.md) | Node/site failure sequence and test plan |
-| [docs/backup-and-restore.md](docs/backup-and-restore.md) | PBS schedule, retention, restore drill |
+| [docs/backup-and-restore.md](docs/backup-and-restore.md) | PBS jobs, retention TODO, restore drill |
 | [docs/runbook.md](docs/runbook.md) | Add a node, rolling upgrades, Galera health |
-| [configs/](configs/) | Sanitized WireGuard, Keepalived, HAProxy, Galera, Proxmox samples — see [configs/README.md](configs/README.md) |
+| [configs/](configs/) | Samples — [configs/README.md](configs/README.md) |
 
 ## Author
 
