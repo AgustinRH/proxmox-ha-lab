@@ -15,8 +15,14 @@
 # -------
 #   install -m 0750 -o root -g keepalived_script \
 #     notify-vip-wg.sh /etc/keepalived/notify-vip-wg.sh
-#   # env file (root-readable; not world-readable):
-#   /etc/keepalived/notify-vip-wg.env
+#   # env file — not world-readable, but MUST be readable by keepalived_script:
+#   /etc/keepalived/notify-vip-wg.env   (e.g. mode 640, group keepalived_script)
+#
+# Privilege note (enable_script_security)
+# ---------------------------------------
+# notify_* runs as script_user keepalived_script, not root. That user must be
+# able to read the env file and SSH to the site routers (dedicated key in
+# ~keepalived_script/.ssh, authorized on GATEWAYS / LOCAL_ROUTER_SSH).
 #
 # Keepalived invokes: notify_* <type> <name> <state> <priority>
 # We key off $3 (MASTER | BACKUP | FAULT).
@@ -158,14 +164,23 @@ apply_withdraw_site_on_gateway() {
 # Local site: clients use the site router; point VIP at the winning webdb
 apply_local_vip_route() {
   local action="$1"  # add | del
+  local route_line
   if [[ -z "$LOCAL_ROUTER_SSH" ]]; then
     log "LOCAL_ROUTER_SSH unset — skip local VIP route (set it in ${CONF})"
     return 0
   fi
   if [[ "$action" == "add" ]]; then
     gw_run "$LOCAL_ROUTER_SSH" ip route replace "${VIP_HOST}/32" via "$LOCAL_WEBDB"
-  else
+    return 0
+  fi
+  # Withdraw: only delete if nexthop is still LOCAL_WEBDB. A late BACKUP/FAULT
+  # must not race the new MASTER, which may already have replaced this route
+  # (via GATEWAYS) with via <other-site-wg> — deleting that black-holes the VIP.
+  route_line="$(gw_run "$LOCAL_ROUTER_SSH" ip route show "${VIP_HOST}/32" 2>/dev/null || true)"
+  if [[ "$route_line" == *" via ${LOCAL_WEBDB} "* || "$route_line" == *" via ${LOCAL_WEBDB}" ]]; then
     gw_run "$LOCAL_ROUTER_SSH" ip route del "${VIP_HOST}/32" 2>/dev/null || true
+  else
+    log "skip local VIP route del (nexthop is not ${LOCAL_WEBDB}: ${route_line:-none})"
   fi
 }
 
